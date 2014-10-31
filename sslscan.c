@@ -29,6 +29,15 @@
  *   version.  If you delete this exception statement from all source      *
  *   files in the program, then also delete it here.                       *
  ***************************************************************************/
+ 
+/*
+ * Michael Naef, cal@linu.gs,
+ * 	- added various application layer support, 8.11.2013
+ * 	  Including the TLS 1.1 & 1.2 patch from Frank Lichtenheld
+ * 	  http://sourceforge.net/p/sslscan/patches/2/
+ *	- added protocol select options
+ *	- added support for trusted ca file, 31.10.2014
+ */
 
 // Includes...
 #include <string.h>
@@ -53,10 +62,16 @@
 
 #define BUFFERSIZE 1024
 
-#define ssl_all 0
-#define ssl_v2 1
-#define ssl_v3 2
-#define tls_v1 3
+// Bitmask for ssl versions
+#define ssl_none 0x00
+#define ssl_v2   0x01
+#define ssl_v3   0x02
+#define ssl_all  0x03 // 0x02+0x01
+#define tls_v1   0x04
+#define tls_v1_1 0x08
+#define tls_v1_2 0x10
+#define tls_all  0x1c // 0x10+0x08+0x04
+#define ssl_tls_all  0xff
 
 // Colour Console Output...
 #if !defined(__WIN32__)
@@ -77,10 +92,11 @@ const char *program_banner = "                   _\n"
                              "          / __/ __| / __|/ __/ _` | '_ \\\n"
                              "          \\__ \\__ \\ \\__ \\ (_| (_| | | | |\n"
                              "          |___/___/_|___/\\___\\__,_|_| |_|\n\n"
-                             "                  Version 1.8.2\n"
+                             "                  Version 1.8.2-mn4\n"
                              "             http://www.titania.co.uk\n"
-                             "        Copyright Ian Ventura-Whiting 2009\n";
-const char *program_version = "sslscan version 1.8.2\nhttp://www.titania.co.uk\nCopyright (C) Ian Ventura-Whiting 2009\n";
+                             "        Copyright Ian Ventura-Whiting 2009\n"
+			     "                   -mn4, mnaef, 2014\n";
+const char *program_version = "sslscan version 1.8.2-mn3\nhttp://www.titania.co.uk\nCopyright (C) Ian Ventura-Whiting 2009\n";
 const char *xml_version = "1.8.2";
 
 
@@ -91,7 +107,7 @@ struct sslCipher
 	char *version;
 	int bits;
 	char description[512];
-	SSL_METHOD *sslMethod;
+	const SSL_METHOD *sslMethod;
 	struct sslCipher *next;
 };
 
@@ -99,9 +115,14 @@ struct sslCheckOptions
 {
 	// Program Options...
 	char host[512];
+	char cafile[512];
 	int port;
 	int noFailed;
-	int starttls;
+	int esmtps;
+	int ftps;
+	int ftps_dcs;
+	int pop3s;
+	int imaps;
 	int sslVersion;
 	int targets;
 	int pout;
@@ -125,7 +146,7 @@ struct sslCheckOptions
 
 
 // Adds Ciphers to the Cipher List structure
-int populateCipherList(struct sslCheckOptions *options, SSL_METHOD *sslMethod)
+int populateCipherList(struct sslCheckOptions *options, const SSL_METHOD *sslMethod)
 {
 	// Variables...
 	int returnCode = true;
@@ -268,9 +289,8 @@ int tcpConnect(struct sslCheckOptions *options)
 		printf("%s    ERROR: Could not open a connection to host %s on port %d.%s\n", COL_RED, options->host, options->port, RESET);
 		return 0;
 	}
-
-	// If STARTTLS is required...
-	if (options->starttls == true)
+	// If SMTP STARTTLS is required...
+	if (options->esmtps == true)
 	{
 		memset(buffer, 0, BUFFERSIZE);
 		recv(socketDescriptor, buffer, BUFFERSIZE - 1, 0);
@@ -296,6 +316,133 @@ int tcpConnect(struct sslCheckOptions *options)
 		{
 			close(socketDescriptor);
 			printf("%s    ERROR: The SMTP service on %s port %d did not appear to support STARTTLS.%s\n", COL_RED, options->host, options->port, RESET);
+			return 0;
+		}
+	}
+	// IF FTPS we go for ftp over ssl
+	else if (options->ftps == true)
+	{
+		memset(buffer, 0, BUFFERSIZE);
+		recv(socketDescriptor, buffer, BUFFERSIZE - 1, 0);
+		if (strncmp(buffer, "220", 3) != 0)
+		{
+			close(socketDescriptor);
+			printf("%s    ERROR: The host %s on port %d did not appear to be an FTP service.%s\n", COL_RED, options->host, options->port, RESET);
+			return 0;
+		}
+		send(socketDescriptor, "AUTH TLS\r\n", 20, 0); // We want to start TLS...
+		memset(buffer, 0, BUFFERSIZE);
+		recv(socketDescriptor, buffer, BUFFERSIZE - 1, 0);
+		if (strncmp(buffer, "234", 3) != 0) // ...and expect 234 to start with the negotiation
+		{
+			close(socketDescriptor);
+			printf("%s    ERROR: The FTP service on %s port %d did not respond with status 234 to our AUTH TLS.%s\n", COL_RED, options->host, options->port, RESET);
+			return 0;
+		}
+	}
+	// IF POP3S STLS
+	else if (options->pop3s == true)
+	{
+		memset(buffer, 0, BUFFERSIZE);
+		recv(socketDescriptor, buffer, BUFFERSIZE - 1, 0);
+		if (strncmp(buffer, "+OK", 3) != 0)
+		{
+			close(socketDescriptor);
+			printf("%s    ERROR: The host %s on port %d did not appear to be an POP3 service.%s\n", COL_RED, options->host, options->port, RESET);
+			return 0;
+		}
+		send(socketDescriptor, "STLS\r\n", 20, 0); // We want to start TLS...
+		memset(buffer, 0, BUFFERSIZE);
+		recv(socketDescriptor, buffer, BUFFERSIZE - 1, 0);
+		if (strncmp(buffer, "+OK", 3) != 0) // ...and expect +OK to start with the negotiation
+		{
+			close(socketDescriptor);
+			printf("%s    ERROR: The POP3 service on %s port %d did not respond with status +OK to our STLS.%s\n", COL_RED, options->host, options->port, RESET);
+			return 0;
+		}
+	}
+	// IF IMAPS SARTTLS
+	else if (options->imaps == true)
+	{
+		memset(buffer, 0, BUFFERSIZE);
+		recv(socketDescriptor, buffer, BUFFERSIZE - 1, 0);
+		if (strncmp(buffer, "* OK", 4) != 0)
+		{
+			close(socketDescriptor);
+			printf("%s    ERROR: The host %s on port %d did not appear to be an IMAP service.%s\n", COL_RED, options->host, options->port, RESET);
+			return 0;
+		}
+		send(socketDescriptor, "AA STARTTLS\r\n", 20, 0); // We want to start TLS...
+		memset(buffer, 0, BUFFERSIZE);
+		recv(socketDescriptor, buffer, BUFFERSIZE - 1, 0);
+		if (strncmp(buffer, "AA", 2) != 0) // ...and expect our AA token to start with the negotiation
+		{
+			close(socketDescriptor);
+			printf("%s    ERROR: The IMAP service on %s port %d did not respond with our token to our SARTTLS.%s\n", COL_RED, options->host, options->port, RESET);
+			return 0;
+		}
+	}
+	// IF FTPS we go for ftp over ssl
+	else if (options->ftps == true)
+	{
+		memset(buffer, 0, BUFFERSIZE);
+		recv(socketDescriptor, buffer, BUFFERSIZE - 1, 0);
+		if (strncmp(buffer, "220", 3) != 0)
+		{
+			close(socketDescriptor);
+			printf("%s    ERROR: The host %s on port %d did not appear to be an FTP service.%s\n", COL_RED, options->host, options->port, RESET);
+			return 0;
+		}
+		send(socketDescriptor, "AUTH TLS\r\n", 20, 0); // We want to start TLS...
+		memset(buffer, 0, BUFFERSIZE);
+		recv(socketDescriptor, buffer, BUFFERSIZE - 1, 0);
+		if (strncmp(buffer, "234", 3) != 0) // ...and expect 234 to start with the negotiation
+		{
+			close(socketDescriptor);
+			printf("%s    ERROR: The FTP service on %s port %d did not respond with status 234 to our AUTH TLS.%s\n", COL_RED, options->host, options->port, RESET);
+			return 0;
+		}
+	}
+	// IF POP3S STLS
+	else if (options->pop3s == true)
+	{
+		memset(buffer, 0, BUFFERSIZE);
+		recv(socketDescriptor, buffer, BUFFERSIZE - 1, 0);
+		printf("%s",buffer);
+		if (strncmp(buffer, "+OK", 3) != 0)
+		{
+			close(socketDescriptor);
+			printf("%s    ERROR: The host %s on port %d did not appear to be an POP3 service.%s\n", COL_RED, options->host, options->port, RESET);
+			return 0;
+		}
+		send(socketDescriptor, "STLS\r\n", 20, 0); // We want to start TLS...
+		memset(buffer, 0, BUFFERSIZE);
+		recv(socketDescriptor, buffer, BUFFERSIZE - 1, 0);
+		if (strncmp(buffer, "+OK", 3) != 0) // ...and expect +OK to start with the negotiation
+		{
+			close(socketDescriptor);
+			printf("%s    ERROR: The POP3 service on %s port %d did not respond with status +OK to our STLS.%s\n", COL_RED, options->host, options->port, RESET);
+			return 0;
+		}
+	}
+	// IF IMAPS SARTTLS
+	else if (options->imaps == true)
+	{
+		memset(buffer, 0, BUFFERSIZE);
+		recv(socketDescriptor, buffer, BUFFERSIZE - 1, 0);
+		if (strncmp(buffer, "* OK", 4) != 0)
+		{
+			close(socketDescriptor);
+			printf("%s    ERROR: The host %s on port %d did not appear to be an IMAP service.%s\n", COL_RED, options->host, options->port, RESET);
+			return 0;
+		}
+		send(socketDescriptor, "AA STARTTLS\r\n", 20, 0); // We want to start TLS...
+		memset(buffer, 0, BUFFERSIZE);
+		recv(socketDescriptor, buffer, BUFFERSIZE - 1, 0);
+		if (strncmp(buffer, "AA", 2) != 0) // ...and expect our AA token to start with the negotiation
+		{
+			close(socketDescriptor);
+			printf("%s    ERROR: The IMAP service on %s port %d did not respond with our token to our SARTTLS.%s\n", COL_RED, options->host, options->port, RESET);
 			return 0;
 		}
 	}
@@ -522,6 +669,36 @@ int testCipher(struct sslCheckOptions *options, struct sslCipher *sslCipherPoint
 									printf("                 ");
 							}
 						}
+						// FTPS: check for Data Connection Security...
+						else if ((options->ftps == true)&&(options->ftps_dcs == true)){
+							SSL_write(ssl, "PROT P\r\n", 8); // We set the data channel to "Private"...
+							memset(buffer ,0 , 4);
+							resultSize = SSL_read(ssl, buffer, 3);
+							if (resultSize == 3 )
+							{
+								if (atoi(buffer) == 200) // ...and expect to succeed.
+									printf("Data-Channel-Encryption-Support: OK (%s)  ",buffer);
+								else
+									printf("Data-Channel-Encryption-Support: NA (%s)  ",buffer);
+								if (options->xmlOutput != 0)
+									fprintf(options->xmlOutput, " data-connection-security-private=\"%s\"", buffer);
+							}
+						}
+						// FTPS: check for Data Connection Security...
+						else if ((options->ftps == true)&&(options->ftps_dcs == true)){
+							SSL_write(ssl, "PROT P\r\n", 8); // We set the data channel to "Private"...
+							memset(buffer ,0 , 4);
+							resultSize = SSL_read(ssl, buffer, 3);
+							if (resultSize == 3 )
+							{
+								if (atoi(buffer) == 200) // ...and expect to succeed.
+									printf("Data-Channel-Encryption-Support: OK (%s)  ",buffer);
+								else
+									printf("Data-Channel-Encryption-Support: NA (%s)  ",buffer);
+								if (options->xmlOutput != 0)
+									fprintf(options->xmlOutput, " data-connection-security-private=\"%s\"", buffer);
+							}
+						}
 					}
 					else if (cipherStatus == 0)
 					{
@@ -581,7 +758,7 @@ int testCipher(struct sslCheckOptions *options, struct sslCipher *sslCipherPoint
 						else
 							printf("SSLv3  ");
 					}
-					else
+					else if (sslCipherPointer->sslMethod == TLSv1_client_method())
 					{
 						if (options->xmlOutput != 0)
 							fprintf(options->xmlOutput, "TLSv1\" bits=\"");
@@ -589,6 +766,28 @@ int testCipher(struct sslCheckOptions *options, struct sslCipher *sslCipherPoint
 							printf("TLSv1 || ");
 						else
 							printf("TLSv1  ");
+					}
+					else if (sslCipherPointer->sslMethod == TLSv1_1_client_method())
+					{
+						if (options->xmlOutput != 0)
+							fprintf(options->xmlOutput, "TLSv1.1\" bits=\"");
+						if (options->pout == true)
+							printf("TLSv1.1 || ");
+						else
+							printf("TLSv1.1  ");
+					}
+					else if (sslCipherPointer->sslMethod == TLSv1_2_client_method())
+					{
+						if (options->xmlOutput != 0)
+							fprintf(options->xmlOutput, "TLSv1.2\" bits=\"");
+						if (options->pout == true)
+							printf("TLSv1.2 || ");
+						else
+							printf("TLSv1.2  ");
+					}
+					else
+					{
+						printf("%sERROR: Could not determine protocol.%s\n", COL_RED, RESET);
 					}
 					if (sslCipherPointer->bits < 10)
 						tempInt = 2;
@@ -645,7 +844,7 @@ int testCipher(struct sslCheckOptions *options, struct sslCipher *sslCipherPoint
 
 
 // Test for prefered ciphers
-int defaultCipher(struct sslCheckOptions *options, SSL_METHOD *sslMethod)
+int defaultCipher(struct sslCheckOptions *options, const SSL_METHOD *sslMethod)
 {
 	// Variables...
 	int cipherStatus;
@@ -706,7 +905,7 @@ int defaultCipher(struct sslCheckOptions *options, SSL_METHOD *sslMethod)
 								else
 									printf("    SSLv3  ");
 							}
-							else
+							else if (sslMethod == TLSv1_client_method())
 							{
 								if (options->xmlOutput != 0)
 									fprintf(options->xmlOutput, "  <defaultcipher sslversion=\"TLSv1\" bits=\"");
@@ -714,6 +913,28 @@ int defaultCipher(struct sslCheckOptions *options, SSL_METHOD *sslMethod)
 									printf("|| TLSv1 || ");
 								else
 									printf("    TLSv1  ");
+							}
+							else if (sslMethod == TLSv1_1_client_method())
+							{
+								if (options->xmlOutput != 0)
+									fprintf(options->xmlOutput, "  <defaultcipher sslversion=\"TLSv1\" bits=\"");
+								if (options->pout == true)
+									printf("|| TLSv1.1 || ");
+								else
+									printf("    TLSv1.1  ");
+							}
+							else if (sslMethod == TLSv1_2_client_method())
+							{
+								if (options->xmlOutput != 0)
+									fprintf(options->xmlOutput, "  <defaultcipher sslversion=\"TLSv1\" bits=\"");
+								if (options->pout == true)
+									printf("|| TLSv1.2 || ");
+								else
+									printf("    TLSv1.2  ");
+							}
+							else
+							{
+								printf("%sERROR: Could not determine protocol.%s\n", COL_RED, RESET);
 							}
 							if (SSL_get_cipher_bits(ssl, &tempInt2) < 10)
 								tempInt = 2;
@@ -793,7 +1014,7 @@ int getCertificate(struct sslCheckOptions *options)
 	BIO *fileBIO = NULL;
 	X509 *x509Cert = NULL;
 	EVP_PKEY *publicKey = NULL;
-	SSL_METHOD *sslMethod = NULL;
+	const SSL_METHOD *sslMethod = NULL;
 	ASN1_OBJECT *asn1Object = NULL;
 	X509_EXTENSION *extension = NULL;
 	char buffer[1024];
@@ -812,284 +1033,295 @@ int getCertificate(struct sslCheckOptions *options)
 		options->ctx = SSL_CTX_new(sslMethod);
 		if (options->ctx != NULL)
 		{
-
-			if (SSL_CTX_set_cipher_list(options->ctx, "ALL:COMPLEMENTOFALL") != 0)
+			// set location for trusted CAs
+			if(SSL_CTX_load_verify_locations(options->ctx,options->cafile,NULL))
 			{
 
-				// Load Certs if required...
-				if ((options->clientCertsFile != 0) || (options->privateKeyFile != 0))
-					status = loadCerts(options);
-
-				if (status == true)
+				if (SSL_CTX_set_cipher_list(options->ctx, "ALL:COMPLEMENTOFALL") != 0)
 				{
-					// Create SSL object...
-					ssl = SSL_new(options->ctx);
-					if (ssl != NULL)
+
+					// Load Certs if required...
+					if ((options->clientCertsFile != 0) || (options->privateKeyFile != 0))
+						status = loadCerts(options);
+
+					if (status == true)
 					{
-
-						// Connect socket and BIO
-						cipherConnectionBio = BIO_new_socket(socketDescriptor, BIO_NOCLOSE);
-
-						// Connect SSL and BIO
-						SSL_set_bio(ssl, cipherConnectionBio, cipherConnectionBio);
-
-						// Connect SSL over socket
-						cipherStatus = SSL_connect(ssl);
-						if (cipherStatus == 1)
+						// Create SSL object...
+						ssl = SSL_new(options->ctx);
+						if (ssl != NULL)
 						{
 
-							// Setup BIO's
-							stdoutBIO = BIO_new(BIO_s_file());
-							BIO_set_fp(stdoutBIO, stdout, BIO_NOCLOSE);
-							if (options->xmlOutput != 0)
-							{
-								fileBIO = BIO_new(BIO_s_file());
-								BIO_set_fp(fileBIO, options->xmlOutput, BIO_NOCLOSE);
-							}
+							// Connect socket and BIO
+							cipherConnectionBio = BIO_new_socket(socketDescriptor, BIO_NOCLOSE);
 
-							// Get Certificate...
-							printf("\n  %sSSL Certificate:%s\n", COL_BLUE, RESET);
-							if (options->xmlOutput != 0)
-								fprintf(options->xmlOutput, "  <certificate>\n");
-							x509Cert = SSL_get_peer_certificate(ssl);
-							if (x509Cert != NULL)
+							// Connect SSL and BIO
+							SSL_set_bio(ssl, cipherConnectionBio, cipherConnectionBio);
+
+							// Connect SSL over socket
+							cipherStatus = SSL_connect(ssl);
+							if (cipherStatus == 1)
 							{
 
-								//SSL_set_verify(ssl, SSL_VERIFY_NONE|SSL_VERIFY_CLIENT_ONCE, NULL);
-
-								// Cert Version
-								if (!(X509_FLAG_COMPAT & X509_FLAG_NO_VERSION))
+								// Setup BIO's
+								stdoutBIO = BIO_new(BIO_s_file());
+								BIO_set_fp(stdoutBIO, stdout, BIO_NOCLOSE);
+								if (options->xmlOutput != 0)
 								{
-									tempLong = X509_get_version(x509Cert);
-									printf("    Version: %lu\n", tempLong);
-									if (options->xmlOutput != 0)
-										fprintf(options->xmlOutput, "   <version>%lu</version>\n", tempLong);
+									fileBIO = BIO_new(BIO_s_file());
+									BIO_set_fp(fileBIO, options->xmlOutput, BIO_NOCLOSE);
 								}
 
-								// Cert Serial No.
-								if (!(X509_FLAG_COMPAT & X509_FLAG_NO_SERIAL))
+								// Get Certificate...
+								printf("\n  %sSSL Certificate:%s\n", COL_BLUE, RESET);
+								if (options->xmlOutput != 0)
+									fprintf(options->xmlOutput, "  <certificate>\n");
+								x509Cert = SSL_get_peer_certificate(ssl);
+								if (x509Cert != NULL)
 								{
-									tempLong = ASN1_INTEGER_get(X509_get_serialNumber(x509Cert));
-									if (tempLong < 1)
+
+									//SSL_set_verify(ssl, SSL_VERIFY_NONE|SSL_VERIFY_CLIENT_ONCE, NULL);
+
+									// Cert Version
+									if (!(X509_FLAG_COMPAT & X509_FLAG_NO_VERSION))
 									{
-										printf("    Serial Number: -%lu\n", tempLong);
+										tempLong = X509_get_version(x509Cert);
+										printf("    Version: %lu\n", tempLong);
 										if (options->xmlOutput != 0)
-											fprintf(options->xmlOutput, "   <serial>-%lu</serial>\n", tempLong);
-									}
-									else
-									{
-										printf("    Serial Number: %lu\n", tempLong);
-										if (options->xmlOutput != 0)
-											fprintf(options->xmlOutput, "   <serial>%lu</serial>\n", tempLong);
-									}
-								}
-
-								// Signature Algo...
-								if (!(X509_FLAG_COMPAT & X509_FLAG_NO_SIGNAME))
-								{
-									printf("    Signature Algorithm: ");
-									i2a_ASN1_OBJECT(stdoutBIO, x509Cert->cert_info->signature->algorithm);
-									printf("\n");
-									if (options->xmlOutput != 0)
-									{
-										fprintf(options->xmlOutput, "   <signature-algorithm>");
-										i2a_ASN1_OBJECT(fileBIO, x509Cert->cert_info->signature->algorithm);
-										fprintf(options->xmlOutput, "</signature-algorithm>\n");
-									}
-								}
-
-								// SSL Certificate Issuer...
-								if (!(X509_FLAG_COMPAT & X509_FLAG_NO_ISSUER))
-								{
-									X509_NAME_oneline(X509_get_issuer_name(x509Cert), buffer, sizeof(buffer) - 1);
-									printf("    Issuer: %s\n", buffer);
-									if (options->xmlOutput != 0)
-										fprintf(options->xmlOutput, "   <issuer>%s</issuer>\n", buffer);
-								}
-
-								// Validity...
-								if (!(X509_FLAG_COMPAT & X509_FLAG_NO_VALIDITY))
-								{
-									printf("    Not valid before: ");
-									ASN1_TIME_print(stdoutBIO, X509_get_notBefore(x509Cert));
-									if (options->xmlOutput != 0)
-									{
-										fprintf(options->xmlOutput, "   <not-valid-before>");
-										ASN1_TIME_print(fileBIO, X509_get_notBefore(x509Cert));
-										fprintf(options->xmlOutput, "</not-valid-before>\n");
-									}
-									printf("\n    Not valid after: ");
-									ASN1_TIME_print(stdoutBIO, X509_get_notAfter(x509Cert));
-									printf("\n");
-									if (options->xmlOutput != 0)
-									{
-										fprintf(options->xmlOutput, "   <not-valid-after>");
-										ASN1_TIME_print(fileBIO, X509_get_notAfter(x509Cert));
-										fprintf(options->xmlOutput, "</not-valid-after>\n");
-									}
-								}
-
-								// SSL Certificate Subject...
-								if (!(X509_FLAG_COMPAT & X509_FLAG_NO_SUBJECT))
-								{
-									X509_NAME_oneline(X509_get_subject_name(x509Cert), buffer, sizeof(buffer) - 1);
-									printf("    Subject: %s\n", buffer);
-									if (options->xmlOutput != 0)
-										fprintf(options->xmlOutput, "   <subject>%s</subject>\n", buffer);
-								}
-
-								// Public Key Algo...
-								if (!(X509_FLAG_COMPAT & X509_FLAG_NO_PUBKEY))
-								{
-									printf("    Public Key Algorithm: ");
-									i2a_ASN1_OBJECT(stdoutBIO, x509Cert->cert_info->key->algor->algorithm);
-									printf("\n");
-									if (options->xmlOutput != 0)
-									{
-										fprintf(options->xmlOutput, "   <pk-algorithm>");
-										i2a_ASN1_OBJECT(fileBIO, x509Cert->cert_info->key->algor->algorithm);
-										fprintf(options->xmlOutput, "</pk-algorithm>\n");
+											fprintf(options->xmlOutput, "   <version>%lu</version>\n", tempLong);
 									}
 
-									// Public Key...
-									publicKey = X509_get_pubkey(x509Cert);
-									if (publicKey == NULL)
+									// Cert Serial No.
+									if (!(X509_FLAG_COMPAT & X509_FLAG_NO_SERIAL))
 									{
-										printf("    Public Key: Could not load\n");
-										if (options->xmlOutput != 0)
-											fprintf(options->xmlOutput, "   <pk error=\"true\" />\n");
-									}
-									else
-									{
-										switch (publicKey->type)
+										tempLong = ASN1_INTEGER_get(X509_get_serialNumber(x509Cert));
+										if (tempLong < 1)
 										{
-											case EVP_PKEY_RSA:
-												printf("    RSA Public Key: (%d bit)\n", BN_num_bits(publicKey->pkey.rsa->n));
-												if (options->xmlOutput != 0)
-													fprintf(options->xmlOutput, "   <pk error=\"false\" type=\"RSA\" bits=\"%d\">\n", BN_num_bits(publicKey->pkey.rsa->n));
-												RSA_print(stdoutBIO, publicKey->pkey.rsa, 6);
-												if (options->xmlOutput != 0)
-												{
-													RSA_print(fileBIO, publicKey->pkey.rsa, 4);
-													fprintf(options->xmlOutput, "   </pk>\n");
-												}
-												break;
-											case EVP_PKEY_DSA:
-												printf("    DSA Public Key:\n");
-												if (options->xmlOutput != 0)
-													fprintf(options->xmlOutput, "   <pk error=\"false\" type=\"DSA\">\n");
-												DSA_print(stdoutBIO, publicKey->pkey.dsa, 6);
-												if (options->xmlOutput != 0)
-												{
-													DSA_print(fileBIO, publicKey->pkey.dsa, 4);
-													fprintf(options->xmlOutput, "   </pk>\n");
-												}
-												break;
-											case EVP_PKEY_EC:
-												printf("    EC Public Key:\n");
-												if (options->xmlOutput != 0)
-													fprintf(options->xmlOutput, "   <pk error=\"false\" type=\"EC\">\n");
-												EC_KEY_print(stdoutBIO, publicKey->pkey.ec, 6);
-												if (options->xmlOutput != 0)
-												{
-													EC_KEY_print(fileBIO, publicKey->pkey.ec, 4);
-													fprintf(options->xmlOutput, "   </pk>\n");
-												}
-												break;
-											default:
-												printf("    Public Key: Unknown\n");
-												if (options->xmlOutput != 0)
-													fprintf(options->xmlOutput, "   <pk error=\"true\" type=\"unknown\" />\n");
-												break;
+											printf("    Serial Number: -%lu\n", tempLong);
+											if (options->xmlOutput != 0)
+												fprintf(options->xmlOutput, "   <serial>-%lu</serial>\n", tempLong);
+										}
+										else
+										{
+											printf("    Serial Number: %lu\n", tempLong);
+											if (options->xmlOutput != 0)
+												fprintf(options->xmlOutput, "   <serial>%lu</serial>\n", tempLong);
+										}
+									}
+
+									// Signature Algo...
+									if (!(X509_FLAG_COMPAT & X509_FLAG_NO_SIGNAME))
+									{
+										printf("    Signature Algorithm: ");
+										i2a_ASN1_OBJECT(stdoutBIO, x509Cert->cert_info->signature->algorithm);
+										printf("\n");
+										if (options->xmlOutput != 0)
+										{
+											fprintf(options->xmlOutput, "   <signature-algorithm>");
+											i2a_ASN1_OBJECT(fileBIO, x509Cert->cert_info->signature->algorithm);
+											fprintf(options->xmlOutput, "</signature-algorithm>\n");
+										}
+									}
+
+									// SSL Certificate Issuer...
+									if (!(X509_FLAG_COMPAT & X509_FLAG_NO_ISSUER))
+									{
+										X509_NAME_oneline(X509_get_issuer_name(x509Cert), buffer, sizeof(buffer) - 1);
+										printf("    Issuer: %s\n", buffer);
+										if (options->xmlOutput != 0)
+											fprintf(options->xmlOutput, "   <issuer>%s</issuer>\n", buffer);
+									}
+
+									// Validity...
+									if (!(X509_FLAG_COMPAT & X509_FLAG_NO_VALIDITY))
+									{
+										printf("    Not valid before: ");
+										ASN1_TIME_print(stdoutBIO, X509_get_notBefore(x509Cert));
+										if (options->xmlOutput != 0)
+										{
+											fprintf(options->xmlOutput, "   <not-valid-before>");
+											ASN1_TIME_print(fileBIO, X509_get_notBefore(x509Cert));
+											fprintf(options->xmlOutput, "</not-valid-before>\n");
+										}
+										printf("\n    Not valid after: ");
+										ASN1_TIME_print(stdoutBIO, X509_get_notAfter(x509Cert));
+										printf("\n");
+										if (options->xmlOutput != 0)
+										{
+											fprintf(options->xmlOutput, "   <not-valid-after>");
+											ASN1_TIME_print(fileBIO, X509_get_notAfter(x509Cert));
+											fprintf(options->xmlOutput, "</not-valid-after>\n");
+										}
+									}
+
+									// SSL Certificate Subject...
+									if (!(X509_FLAG_COMPAT & X509_FLAG_NO_SUBJECT))
+									{
+										X509_NAME_oneline(X509_get_subject_name(x509Cert), buffer, sizeof(buffer) - 1);
+										printf("    Subject: %s\n", buffer);
+										if (options->xmlOutput != 0)
+											fprintf(options->xmlOutput, "   <subject>%s</subject>\n", buffer);
+									}
+
+									// Public Key Algo...
+									if (!(X509_FLAG_COMPAT & X509_FLAG_NO_PUBKEY))
+									{
+										printf("    Public Key Algorithm: ");
+										i2a_ASN1_OBJECT(stdoutBIO, x509Cert->cert_info->key->algor->algorithm);
+										printf("\n");
+										if (options->xmlOutput != 0)
+										{
+											fprintf(options->xmlOutput, "   <pk-algorithm>");
+											i2a_ASN1_OBJECT(fileBIO, x509Cert->cert_info->key->algor->algorithm);
+											fprintf(options->xmlOutput, "</pk-algorithm>\n");
 										}
 
-										EVP_PKEY_free(publicKey);
-									}
-								}
-
-								// X509 v3...
-								if (!(X509_FLAG_COMPAT & X509_FLAG_NO_EXTENSIONS))
-								{
-									if (sk_X509_EXTENSION_num(x509Cert->cert_info->extensions) > 0)
-									{
-										printf("    X509v3 Extensions:\n");
-										if (options->xmlOutput != 0)
-											fprintf(options->xmlOutput, "   <X509v3-Extensions>\n");
-										for (tempInt = 0; tempInt < sk_X509_EXTENSION_num(x509Cert->cert_info->extensions); tempInt++)
+										// Public Key...
+										publicKey = X509_get_pubkey(x509Cert);
+										if (publicKey == NULL)
 										{
-											// Get Extension...
-											extension = sk_X509_EXTENSION_value(x509Cert->cert_info->extensions, tempInt);
-
-											// Print Extension name...
-											printf("      ");
-											asn1Object = X509_EXTENSION_get_object(extension);
-											i2a_ASN1_OBJECT(stdoutBIO, asn1Object);
-											tempInt2 = X509_EXTENSION_get_critical(extension);
-											BIO_printf(stdoutBIO, ": %s\n", tempInt2 ? "critical" : "");
+											printf("    Public Key: Could not load\n");
 											if (options->xmlOutput != 0)
-											{
-												fprintf(options->xmlOutput, "    <extension name=\"");
-												i2a_ASN1_OBJECT(fileBIO, asn1Object);
-												BIO_printf(fileBIO, "\"%s>", tempInt2 ? " level=\"critical\"" : "");
-											}
-
-											// Print Extension value...
-											if (!X509V3_EXT_print(stdoutBIO, extension, X509_FLAG_COMPAT, 8))
-											{
-												printf("        ");
-												M_ASN1_OCTET_STRING_print(stdoutBIO, extension->value);
-											}
-											if (options->xmlOutput != 0)
-											{
-												if (!X509V3_EXT_print(fileBIO, extension, X509_FLAG_COMPAT, 0))
-													M_ASN1_OCTET_STRING_print(fileBIO, extension->value);
-												fprintf(options->xmlOutput, "</extension>\n");
-											}
-											printf("\n");
+												fprintf(options->xmlOutput, "   <pk error=\"true\" />\n");
 										}
-										if (options->xmlOutput != 0)
-											fprintf(options->xmlOutput, "   </X509v3-Extensions>\n");
+										else
+										{
+											switch (publicKey->type)
+											{
+												case EVP_PKEY_RSA:
+													printf("    RSA Public Key: (%d bit)\n", BN_num_bits(publicKey->pkey.rsa->n));
+													if (options->xmlOutput != 0)
+														fprintf(options->xmlOutput, "   <pk error=\"false\" type=\"RSA\" bits=\"%d\">\n", BN_num_bits(publicKey->pkey.rsa->n));
+													RSA_print(stdoutBIO, publicKey->pkey.rsa, 6);
+													if (options->xmlOutput != 0)
+													{
+														RSA_print(fileBIO, publicKey->pkey.rsa, 4);
+														fprintf(options->xmlOutput, "   </pk>\n");
+													}
+													break;
+												case EVP_PKEY_DSA:
+													printf("    DSA Public Key:\n");
+													if (options->xmlOutput != 0)
+														fprintf(options->xmlOutput, "   <pk error=\"false\" type=\"DSA\">\n");
+													DSA_print(stdoutBIO, publicKey->pkey.dsa, 6);
+													if (options->xmlOutput != 0)
+													{
+														DSA_print(fileBIO, publicKey->pkey.dsa, 4);
+														fprintf(options->xmlOutput, "   </pk>\n");
+													}
+													break;
+												#ifdef OPENSSL_WITH_EC
+												case EVP_PKEY_EC:
+													printf("    EC Public Key:\n");
+													if (options->xmlOutput != 0)
+														fprintf(options->xmlOutput, "   <pk error=\"false\" type=\"EC\">\n");
+													EC_KEY_print(stdoutBIO, publicKey->pkey.ec, 6);
+													if (options->xmlOutput != 0)
+													{
+														EC_KEY_print(fileBIO, publicKey->pkey.ec, 4);
+														fprintf(options->xmlOutput, "   </pk>\n");
+													}
+													break;
+												#endif
+												default:
+													printf("    Public Key: Unknown\n");
+													if (options->xmlOutput != 0)
+														fprintf(options->xmlOutput, "   <pk error=\"true\" type=\"unknown\" />\n");
+													break;
+											}
+
+											EVP_PKEY_free(publicKey);
+										}
 									}
+
+									// X509 v3...
+									if (!(X509_FLAG_COMPAT & X509_FLAG_NO_EXTENSIONS))
+									{
+										if (sk_X509_EXTENSION_num(x509Cert->cert_info->extensions) > 0)
+										{
+											printf("    X509v3 Extensions:\n");
+											if (options->xmlOutput != 0)
+												fprintf(options->xmlOutput, "   <X509v3-Extensions>\n");
+											for (tempInt = 0; tempInt < sk_X509_EXTENSION_num(x509Cert->cert_info->extensions); tempInt++)
+											{
+												// Get Extension...
+												extension = sk_X509_EXTENSION_value(x509Cert->cert_info->extensions, tempInt);
+
+												// Print Extension name...
+												printf("      ");
+												asn1Object = X509_EXTENSION_get_object(extension);
+												i2a_ASN1_OBJECT(stdoutBIO, asn1Object);
+												tempInt2 = X509_EXTENSION_get_critical(extension);
+												BIO_printf(stdoutBIO, ": %s\n", tempInt2 ? "critical" : "");
+												if (options->xmlOutput != 0)
+												{
+													fprintf(options->xmlOutput, "    <extension name=\"");
+													i2a_ASN1_OBJECT(fileBIO, asn1Object);
+													BIO_printf(fileBIO, "\"%s>", tempInt2 ? " level=\"critical\"" : "");
+												}
+
+												// Print Extension value...
+												if (!X509V3_EXT_print(stdoutBIO, extension, X509_FLAG_COMPAT, 8))
+												{
+													printf("        ");
+													M_ASN1_OCTET_STRING_print(stdoutBIO, extension->value);
+												}
+												if (options->xmlOutput != 0)
+												{
+													if (!X509V3_EXT_print(fileBIO, extension, X509_FLAG_COMPAT, 0))
+														M_ASN1_OCTET_STRING_print(fileBIO, extension->value);
+													fprintf(options->xmlOutput, "</extension>\n");
+												}
+												printf("\n");
+											}
+											if (options->xmlOutput != 0)
+												fprintf(options->xmlOutput, "   </X509v3-Extensions>\n");
+										}
+									}
+
+									// Verify Certificate...
+									printf("  Verify Certificate:\n");
+									verifyError = SSL_get_verify_result(ssl);
+									if (verifyError == X509_V_OK)
+										printf("    Certificate passed verification\n");
+									else
+										printf("    %s\n", X509_verify_cert_error_string(verifyError));
+
+									// Free X509 Certificate...
+									X509_free(x509Cert);
 								}
 
-								// Verify Certificate...
-								printf("  Verify Certificate:\n");
-								verifyError = SSL_get_verify_result(ssl);
-								if (verifyError == X509_V_OK)
-									printf("    Certificate passed verification\n");
-								else
-									printf("    %s\n", X509_verify_cert_error_string(verifyError));
+								if (options->xmlOutput != 0)
+									fprintf(options->xmlOutput, "  </certificate>\n");
 
-								// Free X509 Certificate...
-								X509_free(x509Cert);
+								// Free BIO
+								BIO_free(stdoutBIO);
+								if (options->xmlOutput != 0)
+									BIO_free(fileBIO);
+
+								// Disconnect SSL over socket
+								SSL_shutdown(ssl);
 							}
 
-							if (options->xmlOutput != 0)
-								fprintf(options->xmlOutput, "  </certificate>\n");
-
-							// Free BIO
-							BIO_free(stdoutBIO);
-							if (options->xmlOutput != 0)
-								BIO_free(fileBIO);
-
-							// Disconnect SSL over socket
-							SSL_shutdown(ssl);
+							// Free SSL object
+							SSL_free(ssl);
 						}
-
-						// Free SSL object
-						SSL_free(ssl);
+						else
+						{
+							status = false;
+							printf("%s    ERROR: Could create SSL object.%s\n", COL_RED, RESET);
+						}
 					}
-					else
-					{
-						status = false;
-						printf("%s    ERROR: Could create SSL object.%s\n", COL_RED, RESET);
-					}
+				}
+				else
+				{
+					status = false;
+					printf("%s    ERROR: Could set cipher.%s\n", COL_RED, RESET);
 				}
 			}
 			else
 			{
 				status = false;
-				printf("%s    ERROR: Could set cipher.%s\n", COL_RED, RESET);
+				printf("%s    ERROR: failed to load trusted CA file:%s.%s\n", COL_RED,options->cafile, RESET);
 			}
 
 			// Free CTX Object
@@ -1189,25 +1421,12 @@ int testHost(struct sslCheckOptions *options)
 		printf("\n  %sPrefered Server Cipher(s):%s\n", COL_BLUE, RESET);
 		if (options->pout == true)
 			printf("|| Version || Bits || Cipher ||\n");
-		switch (options->sslVersion)
-		{
-			case ssl_all:
-				status = defaultCipher(options, SSLv2_client_method());
-				if (status != false)
-					status = defaultCipher(options, SSLv3_client_method());
-				if (status != false)
-					status = defaultCipher(options, TLSv1_client_method());
-				break;
-			case ssl_v2:
-				status = defaultCipher(options, SSLv2_client_method());
-				break;
-			case ssl_v3:
-				status = defaultCipher(options, SSLv3_client_method());
-				break;
-			case tls_v1:
-				status = defaultCipher(options, TLSv1_client_method());
-				break;
-		}
+		status= true;
+		if((options->sslVersion & ssl_v2) && (status != false)) status = defaultCipher(options, SSLv2_client_method()); 
+		if((options->sslVersion & ssl_v3) && (status != false)) status = defaultCipher(options, SSLv3_client_method());
+		if((options->sslVersion & tls_v1) && (status != false)) status = defaultCipher(options, TLSv1_client_method());
+		if((options->sslVersion & tls_v1_1) && (status != false)) status = defaultCipher(options, TLSv1_1_client_method());
+		if((options->sslVersion & tls_v1_2) && (status != false)) status = defaultCipher(options, TLSv1_2_client_method());
 	}
 
 	if (status == true)
@@ -1243,9 +1462,14 @@ int main(int argc, char *argv[])
 	options.port = 443;
 	xmlArg = 0;
 	strcpy(options.host, "127.0.0.1");
+	strcpy(options.cafile,"/etc/ssl/certs/ca-certificates.crt");
 	options.noFailed = false;
-	options.starttls = false;
-	options.sslVersion = ssl_all;
+	options.esmtps = false;
+	options.pop3s = false;
+	options.imaps = false;
+	options.ftps = false;
+	options.ftps_dcs = false;
+	options.sslVersion = ssl_none;
 	options.pout = false;
 	SSL_library_init();
 
@@ -1264,7 +1488,7 @@ int main(int argc, char *argv[])
 		}
 
 		// Show only supported
-		else if (strcmp("--no-failed", argv[argLoop]) == 0)
+		else if ((strcmp("--no-failed", argv[argLoop]) == 0) || (strcmp("-n", argv[argLoop]) == 0))
 			options.noFailed = true;
 
 		// Version
@@ -1274,6 +1498,10 @@ int main(int argc, char *argv[])
 		// XML Output
 		else if (strncmp("--xml=", argv[argLoop], 6) == 0)
 			xmlArg = argLoop;
+
+		// Trsuted CA file
+		else if (strncmp("--cafile=", argv[argLoop],9) == 0)
+			strncpy(options.cafile,argv[argLoop]+9,sizeof(options.cafile));
 
 		// P Output
 		else if (strcmp("-p", argv[argLoop]) == 0)
@@ -1291,24 +1519,73 @@ int main(int argc, char *argv[])
 		else if (strncmp("--pkpass=", argv[argLoop], 9) == 0)
 			options.privateKeyPassword = argv[argLoop] +9;
 
-		// StartTLS...
-		else if (strcmp("--starttls", argv[argLoop]) == 0)
+		// ESMTPS, SMTP with STARTTLS
+		else if ((strcmp("--esmtps", argv[argLoop]) == 0) || (strcmp("--starttls", argv[argLoop]) == 0))
 		{
-			options.sslVersion = tls_v1;
-			options.starttls = true;
+			options.esmtps = true;
+			options.port = 25;
 		}
 
-		// SSL v2 only...
+		// FTPS / FTP over SSL
+		else if (strcmp("--ftps", argv[argLoop]) == 0)
+		{
+			options.ftps = true;
+			options.port = 21;
+		}
+
+		// FTPS / FTP over SSL check for Data Connection Sercurity: Private
+		else if (strcmp("--ftps-dcs", argv[argLoop]) == 0)
+		{
+			options.ftps = true;
+			options.ftps_dcs = true;
+			options.port = 21;
+		}
+
+		// POP3S / STLS for pop3
+		else if (strcmp("--pop3s", argv[argLoop]) == 0)
+		{
+			options.pop3s = true;
+			options.port = 110;
+		}
+
+		// IMAPS / SARTTLS for imap
+		else if (strcmp("--imaps", argv[argLoop]) == 0)
+		{
+			options.imaps = true;
+			options.port = 143;
+		}
+		
+		// SSL v2
 		else if (strcmp("--ssl2", argv[argLoop]) == 0)
-			options.sslVersion = ssl_v2;
+			options.sslVersion |= ssl_v2;
 
-		// SSL v3 only...
+		// SSL v3
 		else if (strcmp("--ssl3", argv[argLoop]) == 0)
-			options.sslVersion = ssl_v3;
+			options.sslVersion |= ssl_v3;
 
-		// TLS v1 only...
+		// TLS v1
 		else if (strcmp("--tls1", argv[argLoop]) == 0)
-			options.sslVersion = tls_v1;
+			options.sslVersion |= tls_v1;
+
+		// TLS v1.1
+		else if (strcmp("--tls1_1", argv[argLoop]) == 0)
+			options.sslVersion |= tls_v1_1;
+
+		// TLS v1.2
+		else if (strcmp("--tls1_2", argv[argLoop]) == 0)
+			options.sslVersion |= tls_v1_2;
+
+		// all SSL & TLS protocols
+		else if ((strcmp("--all", argv[argLoop]) == 0) || (strcmp("-a", argv[argLoop]) == 0))
+			options.sslVersion |= ssl_tls_all;
+
+		// all SSL protocols
+		else if (strcmp("--ssl", argv[argLoop]) == 0)
+			options.sslVersion |= ssl_all;
+
+		// all TLS protocols
+		else if (strcmp("--tls", argv[argLoop]) == 0)
+			options.sslVersion |= tls_all;
 
 		// SSL Bugs...
 		else if (strcmp("--bugs", argv[argLoop]) == 0)
@@ -1372,16 +1649,45 @@ int main(int argc, char *argv[])
 			printf("certificates /  private key can be configured and output is\n");
 			printf("to text / XML.\n\n");
 			printf("%sCommand:%s\n", COL_BLUE, RESET);
-			printf("  %s%s [Options] [host:port | host]%s\n\n", COL_GREEN, argv[0], RESET);
+			printf("  %s%s [Options] [Protocols ..] [host:port | host]%s\n\n", COL_GREEN, argv[0], RESET);
 			printf("%sOptions:%s\n", COL_BLUE, RESET);
 			printf("  %s--targets=<file>%s     A file containing a list of hosts to\n", COL_GREEN, RESET);
 			printf("                       check.  Hosts can  be supplied  with\n");
 			printf("                       ports (i.e. host:port).\n");
-			printf("  %s--no-failed%s          List only accepted ciphers  (default\n", COL_GREEN, RESET);
-			printf("                       is to listing all ciphers).\n");
-			printf("  %s--ssl2%s               Only check SSLv2 ciphers.\n", COL_GREEN, RESET);
-			printf("  %s--ssl3%s               Only check SSLv3 ciphers.\n", COL_GREEN, RESET);
-			printf("  %s--tls1%s               Only check TLSv1 ciphers.\n", COL_GREEN, RESET);
+			printf("  %s--no-failed, -n%s      List only accepted ciphers  (default\n", COL_GREEN, RESET);
+			printf("                       is to list all ciphers).\n");
+			printf("\n");
+			printf("Protocols:\n");
+			printf("  Any combination of:\n");
+			printf("  %s--all, -a%s            Test all SSL and TLS protocols.\n", COL_GREEN, RESET);
+			printf("  %s--ssl%s                Test all SSL protocols.\n", COL_GREEN, RESET);
+			printf("  %s--tls%s                Test all TLS protocols.\n", COL_GREEN, RESET);
+			printf("\n");
+			printf("  %s--ssl2%s               Test SSLv2 protocol.\n", COL_GREEN, RESET);
+			printf("  %s--ssl3%s               Test SSLv3 protocol.\n", COL_GREEN, RESET);
+			printf("\n");
+			printf("  %s--tls1%s               Test TLSv1 protocol.\n", COL_GREEN, RESET);
+			printf("  %s--tls1_1%s             Test TLSv1.1 protocol.\n", COL_GREEN, RESET);
+			printf("  %s--tls1_2%s             Test TLSv1.2 protocol.\n", COL_GREEN, RESET);
+			printf("\n");
+			printf("  %s--bugs%s               Enable SSL implementation  bug work-\n", COL_GREEN, RESET);
+			printf("                       arounds.\n");
+			printf("\n");
+			printf("Application layer protocols:\n");
+			printf("  %s--esmtps%s             SMTP: Use STARTTLS to initiate SSL.\n", COL_GREEN, RESET);
+			printf("  %s--starttls%s           alias for --esmtps. Historic.\n", COL_GREEN, RESET);
+			printf("  %s--pop3s%s              POP3: Use STLS to initiate SSL.\n", COL_GREEN, RESET);
+			printf("  %s--imaps%s              IMAP: Use STARTTLS to initiate SSL.\n", COL_GREEN, RESET);
+			printf("  %s--ftps%s               FTP: Use AUTH TLS to initiate SSL.\n", COL_GREEN, RESET);
+			printf("  %s--ftps-dcs%s           FTP: Check if the  server  claims to\n", COL_GREEN, RESET);
+			printf("               	       support data channel ecnryption.\n");
+			printf("               	       (data channel is NOT initiated)\n");
+			printf("  %s--http%s               Test a HTTP connection.\n", COL_GREEN, RESET);
+			printf("\n");
+			printf("Certificates:\n");
+			printf("  %s--cafile=<file>%s      A file containing the  trusted  cer-\n", COL_GREEN, RESET);
+			printf("                       tificates. Default is\n");
+			printf("                       %s.\n",options.cafile);
 			printf("  %s--pk=<file>%s          A file containing the private key or\n", COL_GREEN, RESET);
 			printf("                       a PKCS#12  file containing a private\n");
 			printf("                       key/certificate pair (as produced by\n");
@@ -1390,17 +1696,17 @@ int main(int argc, char *argv[])
 			printf("                       PKCS#12 file.\n");
 			printf("  %s--certs=<file>%s       A file containing PEM/ASN1 formatted\n", COL_GREEN, RESET);
 			printf("                       client certificates.\n");
-			printf("  %s--starttls%s           If a STARTTLS is required to kick an\n", COL_GREEN, RESET);
-			printf("                       SMTP service into action.\n");
-			printf("  %s--http%s               Test a HTTP connection.\n", COL_GREEN, RESET);
-			printf("  %s--bugs%s               Enable SSL implementation  bug work-\n", COL_GREEN, RESET);
-			printf("                       arounds.\n");
+			printf("\n");
+			printf("Output:\n");
 			printf("  %s--xml=<file>%s         Output results to an XML file.\n", COL_GREEN, RESET);
+			printf("  %s-p%s                   Format results in pseudo wiki table.\n", COL_GREEN, RESET);
 			printf("  %s--version%s            Display the program version.\n", COL_GREEN, RESET);
 			printf("  %s--help%s               Display the  help text  you are  now\n", COL_GREEN, RESET);
 			printf("                       reading.\n");
-			printf("%sExample:%s\n", COL_BLUE, RESET);
+			printf("%sExamples:%s\n", COL_BLUE, RESET);
 			printf("  %s%s 127.0.0.1%s\n\n", COL_GREEN, argv[0], RESET);
+			printf("  %s%s --esmtps --tls1 127.0.0.1%s\n\n", COL_GREEN, argv[0], RESET);
+			printf("  %s%s --esmtps --tls1 127.0.0.1:587%s\n\n", COL_GREEN, argv[0], RESET);
 			break;
 
 		// Check a single host/port ciphers...
@@ -1412,23 +1718,11 @@ int main(int argc, char *argv[])
 			ERR_load_crypto_strings();
 
 			// Build a list of ciphers...
-			switch (options.sslVersion)
-			{
-				case ssl_all:
-					populateCipherList(&options, SSLv2_client_method());
-					populateCipherList(&options, SSLv3_client_method());
-					populateCipherList(&options, TLSv1_client_method());
-					break;
-				case ssl_v2:
-					populateCipherList(&options, SSLv2_client_method());
-					break;
-				case ssl_v3:
-					populateCipherList(&options, SSLv3_client_method());
-					break;
-				case tls_v1:
-					populateCipherList(&options, TLSv1_client_method());
-					break;
-			}
+			if(options.sslVersion & ssl_v2) populateCipherList(&options, SSLv2_client_method()); 
+			if(options.sslVersion & ssl_v3) populateCipherList(&options, SSLv3_client_method()); 
+			if(options.sslVersion & tls_v1) populateCipherList(&options, TLSv1_client_method()); 
+			if(options.sslVersion & tls_v1_1) populateCipherList(&options, TLSv1_1_client_method()); 
+			if(options.sslVersion & tls_v1_2) populateCipherList(&options, TLSv1_2_client_method()); 
 
 			// Do the testing...
 			if (mode == mode_single)
