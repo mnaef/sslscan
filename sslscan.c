@@ -37,6 +37,7 @@
  * 	  http://sourceforge.net/p/sslscan/patches/2/
  *	- added protocol select options
  *	- added support for trusted ca file, 31.10.2014
+ *	- added support for SNI, 1.7.2015
  */
 
 // Includes...
@@ -128,6 +129,8 @@ struct sslCheckOptions
 	int pout;
 	int sslbugs;
 	int http;
+	int sniEnable;
+	char sniServername[512];
 
 	// File Handles...
 	FILE *xmlOutput;
@@ -610,6 +613,14 @@ int testCipher(struct sslCheckOptions *options, struct sslCipher *sslCipherPoint
 				// Connect SSL and BIO
 				SSL_set_bio(ssl, cipherConnectionBio, cipherConnectionBio);
 
+				// set SNI Servername
+				if (options->sniEnable == true){
+					if(!SSL_set_tlsext_host_name(ssl,options->sniServername)){
+						status = false;
+						printf("%s    ERROR: Failed to set the SNI servername to %s%s\n", COL_RED,options->sniServername,RESET);
+					}
+				}
+
 				// Connect SSL over socket
 				cipherStatus = SSL_connect(ssl);
 
@@ -883,6 +894,14 @@ int defaultCipher(struct sslCheckOptions *options, const SSL_METHOD *sslMethod)
 						// Connect SSL and BIO
 						SSL_set_bio(ssl, cipherConnectionBio, cipherConnectionBio);
 
+						// set SNI Servername
+						if (options->sniEnable == true){
+							if(!SSL_set_tlsext_host_name(ssl,options->sniServername)){
+								status = false;
+								printf("%s    ERROR: Failed to set the SNI servername to %s%s\n", COL_RED,options->sniServername,RESET);
+							}
+						}
+
 						// Connect SSL over socket
 						cipherStatus = SSL_connect(ssl);
 						if (cipherStatus == 1)
@@ -1056,6 +1075,14 @@ int getCertificate(struct sslCheckOptions *options)
 
 							// Connect SSL and BIO
 							SSL_set_bio(ssl, cipherConnectionBio, cipherConnectionBio);
+							
+							// set SNI Servername
+							if (options->sniEnable == true){
+								if(!SSL_set_tlsext_host_name(ssl,options->sniServername)){
+									status = false;
+									printf("%s    ERROR: Failed to set the SNI servername to %s%s\n", COL_RED,options->sniServername,RESET);
+								}
+							}
 
 							// Connect SSL over socket
 							cipherStatus = SSL_connect(ssl);
@@ -1591,6 +1618,13 @@ int main(int argc, char *argv[])
 		else if (strcmp("--bugs", argv[argLoop]) == 0)
 			options.sslbugs = 1;
 
+		// SNI
+		else if (strncmp("--sni=", argv[argLoop], 6) == 0)
+		{
+			options.sniEnable = 1;
+			strncpy(options.sniServername,argv[argLoop]+6,sizeof(options.sniServername));
+		}
+
 		// SSL HTTP Get...
 		else if (strcmp("--http", argv[argLoop]) == 0)
 			options.http = 1;
@@ -1670,6 +1704,8 @@ int main(int argc, char *argv[])
 			printf("  %s--tls1_1%s             Test TLSv1.1 protocol.\n", COL_GREEN, RESET);
 			printf("  %s--tls1_2%s             Test TLSv1.2 protocol.\n", COL_GREEN, RESET);
 			printf("\n");
+			printf("Protocol options:\n");
+			printf("  %s--sni=<hostname>%s     Enable SNI and set the Servername.\n", COL_GREEN, RESET);
 			printf("  %s--bugs%s               Enable SSL implementation  bug work-\n", COL_GREEN, RESET);
 			printf("                       arounds.\n");
 			printf("\n");
