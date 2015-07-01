@@ -617,7 +617,7 @@ int testCipher(struct sslCheckOptions *options, struct sslCipher *sslCipherPoint
 				if (options->sniEnable == true){
 					if(!SSL_set_tlsext_host_name(ssl,options->sniServername)){
 						status = false;
-						printf("%s    ERROR: Failed to set the SNI servername to %s%s\n", COL_RED,options->sniServername,RESET);
+						printf("%s    ERROR: Failed to set the SNI servername to %s (SSLv1-3 does not support SNI)%s\n", COL_RED,options->sniServername,RESET);
 					}
 				}
 
@@ -898,7 +898,7 @@ int defaultCipher(struct sslCheckOptions *options, const SSL_METHOD *sslMethod)
 						if (options->sniEnable == true){
 							if(!SSL_set_tlsext_host_name(ssl,options->sniServername)){
 								status = false;
-								printf("%s    ERROR: Failed to set the SNI servername to %s%s\n", COL_RED,options->sniServername,RESET);
+								printf("%s    ERROR: Failed to set the SNI servername to %s (SSLv1-3 does not support SNI)%s\n", COL_RED,options->sniServername,RESET);
 							}
 						}
 
@@ -1080,7 +1080,7 @@ int getCertificate(struct sslCheckOptions *options)
 							if (options->sniEnable == true){
 								if(!SSL_set_tlsext_host_name(ssl,options->sniServername)){
 									status = false;
-									printf("%s    ERROR: Failed to set the SNI servername to %s%s\n", COL_RED,options->sniServername,RESET);
+									printf("%s    ERROR: Failed to set the SNI servername to %s (SSLv1-3 does not support SNI)%s\n", COL_RED,options->sniServername,RESET);
 								}
 							}
 
@@ -1488,7 +1488,7 @@ int main(int argc, char *argv[])
 	memset(&options, 0, sizeof(struct sslCheckOptions));
 	options.port = 443;
 	xmlArg = 0;
-	strcpy(options.host, "127.0.0.1");
+	strcpy(options.host, "");
 	strcpy(options.cafile,"/etc/ssl/certs/ca-certificates.crt");
 	options.noFailed = false;
 	options.esmtps = false;
@@ -1528,7 +1528,7 @@ int main(int argc, char *argv[])
 
 		// Trsuted CA file
 		else if (strncmp("--cafile=", argv[argLoop],9) == 0)
-			strncpy(options.cafile,argv[argLoop]+9,sizeof(options.cafile));
+			strncpy(options.cafile,argv[argLoop]+9,sizeof(options.cafile) -1);
 
 		// P Output
 		else if (strcmp("-p", argv[argLoop]) == 0)
@@ -1622,35 +1622,36 @@ int main(int argc, char *argv[])
 		else if (strncmp("--sni=", argv[argLoop], 6) == 0)
 		{
 			options.sniEnable = 1;
-			strncpy(options.sniServername,argv[argLoop]+6,sizeof(options.sniServername));
+			strncpy(options.sniServername,argv[argLoop]+6,sizeof(options.sniServername) -1);
 		}
 
 		// SSL HTTP Get...
 		else if (strcmp("--http", argv[argLoop]) == 0)
 			options.http = 1;
 
-		// Host (maybe port too)...
-		else if (argLoop + 1 == argc)
-		{
-			mode = mode_single;
-
-			// Get host...
-			tempInt = 0;
-			maxSize = strlen(argv[argLoop]);
-			while ((argv[argLoop][tempInt] != 0) && (argv[argLoop][tempInt] != ':'))
-				tempInt++;
-			argv[argLoop][tempInt] = 0;
-			strncpy(options.host, argv[argLoop], sizeof(options.host) -1);
-
-			// Get port (if it exists)...
-			tempInt++;
-			if (tempInt < maxSize)
-				options.port = atoi(argv[argLoop] + tempInt);
-		}
-
-		// Not too sure what the user is doing...
+		// Host or anything else...
 		else
-			mode = mode_help;
+			// Host (maybe port too) if not set in a prevous loop...
+			if(strlen(options.host) == 0){
+				mode = mode_single;
+
+				// Get host...
+				tempInt = 0;
+				maxSize = strlen(argv[argLoop]);
+				while ((argv[argLoop][tempInt] != 0) && (argv[argLoop][tempInt] != ':'))
+					tempInt++;
+				argv[argLoop][tempInt] = 0;
+				strncpy(options.host, argv[argLoop], sizeof(options.host) -1);
+
+				// Get port (if it exists)...
+				tempInt++;
+				if (tempInt < maxSize)
+					options.port = atoi(argv[argLoop] + tempInt);
+				
+			// We already have a host. Not too sure what the user is doing...
+			}else{
+				mode = mode_help;
+			}
 	}
 
 	// Open XML file output...
