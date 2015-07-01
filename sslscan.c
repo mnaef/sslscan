@@ -38,6 +38,7 @@
  *	- added protocol select options
  *	- added support for trusted ca file, 31.10.2014
  *	- added support for SNI, 1.7.2015
+ *	- made hostname argument position independent
  */
 
 // Includes...
@@ -93,7 +94,7 @@ const char *program_banner = "                   _\n"
                              "          / __/ __| / __|/ __/ _` | '_ \\\n"
                              "          \\__ \\__ \\ \\__ \\ (_| (_| | | | |\n"
                              "          |___/___/_|___/\\___\\__,_|_| |_|\n\n"
-                             "                  Version 1.8.2-mn4\n"
+                             "                  Version 1.8.2-mn5\n"
                              "             http://www.titania.co.uk\n"
                              "        Copyright Ian Ventura-Whiting 2009\n"
 			     "                   -mn5, mnaef, 2015\n";
