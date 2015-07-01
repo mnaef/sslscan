@@ -96,8 +96,8 @@ const char *program_banner = "                   _\n"
                              "                  Version 1.8.2-mn4\n"
                              "             http://www.titania.co.uk\n"
                              "        Copyright Ian Ventura-Whiting 2009\n"
-			     "                   -mn4, mnaef, 2014\n";
-const char *program_version = "sslscan version 1.8.2-mn3\nhttp://www.titania.co.uk\nCopyright (C) Ian Ventura-Whiting 2009\n";
+			     "                   -mn5, mnaef, 2015\n";
+const char *program_version = "sslscan version 1.8.2-mn5\nhttp://www.titania.co.uk\nCopyright (C) Ian Ventura-Whiting 2009\n";
 const char *xml_version = "1.8.2";
 
 
