@@ -1,6 +1,11 @@
 Changelog
 =========
 
+Version: 1.8.2-mn6
+Date   : 14/12/2015
+Author : Michael Naef
+Changes: Introduce DISABLE_SSLv2 switch for Ubuntu 14.04
+
 Version: 1.8.2
 Date   : 19/06/2009
 Author : Ian Ventura-Whiting (Fizz)

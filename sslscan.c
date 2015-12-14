@@ -39,6 +39,7 @@
  *	- added support for trusted ca file, 31.10.2014
  *	- added support for SNI, 1.7.2015
  *	- made hostname argument position independent
+ *	- Introduce DISABLE_SSLv2 switch for Ubuntu 14.04
  */
 
 // Includes...
@@ -94,11 +95,11 @@ const char *program_banner = "                   _\n"
                              "          / __/ __| / __|/ __/ _` | '_ \\\n"
                              "          \\__ \\__ \\ \\__ \\ (_| (_| | | | |\n"
                              "          |___/___/_|___/\\___\\__,_|_| |_|\n\n"
-                             "                  Version 1.8.2-mn5\n"
+                             "                  Version 1.8.2-mn6\n"
                              "             http://www.titania.co.uk\n"
                              "        Copyright Ian Ventura-Whiting 2009\n"
-			     "                   -mn5, mnaef, 2015\n";
-const char *program_version = "sslscan version 1.8.2-mn5\nhttp://www.titania.co.uk\nCopyright (C) Ian Ventura-Whiting 2009\n";
+			     "                   -mn6, mnaef, 2015\n";
+const char *program_version = "sslscan version 1.8.2-mn6\nhttp://www.titania.co.uk\nCopyright (C) Ian Ventura-Whiting 2009\n";
 const char *xml_version = "1.8.2";
 
 
