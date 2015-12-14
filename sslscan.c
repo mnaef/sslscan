@@ -752,6 +752,7 @@ int testCipher(struct sslCheckOptions *options, struct sslCipher *sslCipherPoint
 					}
 					if (options->xmlOutput != 0)
 						fprintf(options->xmlOutput, " sslversion=\"");
+#ifndef DISABLE_SSLv2
 					if (sslCipherPointer->sslMethod == SSLv2_client_method())
 					{
 						if (options->xmlOutput != 0)
@@ -761,6 +762,7 @@ int testCipher(struct sslCheckOptions *options, struct sslCipher *sslCipherPoint
 						else
 							printf("SSLv2  ");
 					}
+#endif
 					else if (sslCipherPointer->sslMethod == SSLv3_client_method())
 					{
 						if (options->xmlOutput != 0)
@@ -907,6 +909,7 @@ int defaultCipher(struct sslCheckOptions *options, const SSL_METHOD *sslMethod)
 						cipherStatus = SSL_connect(ssl);
 						if (cipherStatus == 1)
 						{
+#ifndef DISABLE_SSLv2
 							if (sslMethod == SSLv2_client_method())
 							{
 								if (options->xmlOutput != 0)
@@ -916,7 +919,9 @@ int defaultCipher(struct sslCheckOptions *options, const SSL_METHOD *sslMethod)
 								else
 									printf("    SSLv2  ");
 							}
-							else if (sslMethod == SSLv3_client_method())
+							else
+#endif
+							if (sslMethod == SSLv3_client_method())
 							{
 								if (options->xmlOutput != 0)
 									fprintf(options->xmlOutput, "  <defaultcipher sslversion=\"SSLv3\" bits=\"");
@@ -1450,7 +1455,9 @@ int testHost(struct sslCheckOptions *options)
 		if (options->pout == true)
 			printf("|| Version || Bits || Cipher ||\n");
 		status= true;
+#ifndef DISABLE_SSLv2
 		if((options->sslVersion & ssl_v2) && (status != false)) status = defaultCipher(options, SSLv2_client_method()); 
+#endif
 		if((options->sslVersion & ssl_v3) && (status != false)) status = defaultCipher(options, SSLv3_client_method());
 		if((options->sslVersion & tls_v1) && (status != false)) status = defaultCipher(options, TLSv1_client_method());
 		if((options->sslVersion & tls_v1_1) && (status != false)) status = defaultCipher(options, TLSv1_1_client_method());
@@ -1699,7 +1706,9 @@ int main(int argc, char *argv[])
 			printf("  %s--ssl%s                Test all SSL protocols.\n", COL_GREEN, RESET);
 			printf("  %s--tls%s                Test all TLS protocols.\n", COL_GREEN, RESET);
 			printf("\n");
+#ifndef DISABLE_SSLv2
 			printf("  %s--ssl2%s               Test SSLv2 protocol.\n", COL_GREEN, RESET);
+#endif
 			printf("  %s--ssl3%s               Test SSLv3 protocol.\n", COL_GREEN, RESET);
 			printf("\n");
 			printf("  %s--tls1%s               Test TLSv1 protocol.\n", COL_GREEN, RESET);
@@ -1756,7 +1765,9 @@ int main(int argc, char *argv[])
 			ERR_load_crypto_strings();
 
 			// Build a list of ciphers...
+#ifndef DISABLE_SSLv2
 			if(options.sslVersion & ssl_v2) populateCipherList(&options, SSLv2_client_method()); 
+#endif
 			if(options.sslVersion & ssl_v3) populateCipherList(&options, SSLv3_client_method()); 
 			if(options.sslVersion & tls_v1) populateCipherList(&options, TLSv1_client_method()); 
 			if(options.sslVersion & tls_v1_1) populateCipherList(&options, TLSv1_1_client_method()); 

@@ -1,11 +1,11 @@
 SRCS = sslscan.c
 BINPATH = /usr/bin/
 MANPATH = /usr/share/man/
-DEFINES=-DOPENSSL_WITH_EC
+DEFINES=-DOPENSSL_WITH_EC -DDISABLE_SSLv2
 
 
 all:
-	gcc -g -Wall -lssl -lcrypto -o sslscan $(DEFINES) $(SRCS) $(LDFLAGS) $(CFLAGS)
+	gcc -g -Wall -o sslscan $(DEFINES) $(SRCS) $(LDFLAGS) $(CFLAGS) -lssl -lssl3 -lcrypto
 
 install:
 	cp sslscan $(BINPATH)
