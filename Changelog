@@ -4,12 +4,18 @@ Changelog
 Version: 1.8.2-mn7
 Date   : 14/11/2015
 Author : Michael Naef
-Changes: Fix handling of long serial numbers
+Changes: The following are a list of changes
+         since the previous version:
+            > Fixed handling of long serial numbers
+            > Display verison like 'openssl x509 -text'
+
 
 Version: 1.8.2-mn6
 Date   : 14/12/2015
 Author : Michael Naef
-Changes: Introduce DISABLE_SSLv2 switch for Ubuntu 14.04
+Changes: The following are a list of changes
+         since the previous version:
+            > Introduce DISABLE_SSLv2 switch for Ubuntu 14.04
 
 Version: 1.8.2
 Date   : 19/06/2009
