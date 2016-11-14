@@ -1146,6 +1146,7 @@ int getCertificate(struct sslCheckOptions *options)
 													fprintf(options->xmlOutput, "%02x%c",asn1_serial->data[i],
 													((i+1 == asn1_serial->length)?'<':':'));
 											}
+											if (options->xmlOutput != 0)
 												fprintf(options->xmlOutput, "/serial>\n");
 										}
 									}
