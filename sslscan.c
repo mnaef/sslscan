@@ -1120,7 +1120,7 @@ int getCertificate(struct sslCheckOptions *options)
 									if (!(X509_FLAG_COMPAT & X509_FLAG_NO_VERSION))
 									{
 										tempLong = X509_get_version(x509Cert);
-										printf("    Version: %lu\n", tempLong);
+										printf("    Version: %lu (0x%lx)\n", tempLong+1, tempLong);
 										if (options->xmlOutput != 0)
 											fprintf(options->xmlOutput, "   <version>%lu</version>\n", tempLong);
 									}
