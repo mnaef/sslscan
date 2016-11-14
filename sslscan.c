@@ -40,6 +40,7 @@
  *	- added support for SNI, 1.7.2015
  *	- made hostname argument position independent
  *	- Introduce DISABLE_SSLv2 switch for Ubuntu 14.04
+ *	- fixed handling of long serial numbers, 14.11.2016
  */
 
 // Includes...
@@ -95,11 +96,11 @@ const char *program_banner = "                   _\n"
                              "          / __/ __| / __|/ __/ _` | '_ \\\n"
                              "          \\__ \\__ \\ \\__ \\ (_| (_| | | | |\n"
                              "          |___/___/_|___/\\___\\__,_|_| |_|\n\n"
-                             "                  Version 1.8.2-mn6\n"
+                             "                  Version 1.8.2-mn7\n"
                              "             http://www.titania.co.uk\n"
                              "        Copyright Ian Ventura-Whiting 2009\n"
-			     "                   -mn6, mnaef, 2015\n";
-const char *program_version = "sslscan version 1.8.2-mn6\nhttp://www.titania.co.uk\nCopyright (C) Ian Ventura-Whiting 2009\n";
+			     "                   -mn7, mnaef, 2016\n";
+const char *program_version = "sslscan version 1.8.2-mn7\nhttp://www.titania.co.uk\nCopyright (C) Ian Ventura-Whiting 2009\n";
 const char *xml_version = "1.8.2";
 
 
@@ -1127,18 +1128,25 @@ int getCertificate(struct sslCheckOptions *options)
 									// Cert Serial No.
 									if (!(X509_FLAG_COMPAT & X509_FLAG_NO_SERIAL))
 									{
-										tempLong = ASN1_INTEGER_get(X509_get_serialNumber(x509Cert));
-										if (tempLong < 1)
-										{
-											printf("    Serial Number: -%lu\n", tempLong);
+										ASN1_INTEGER *asn1_serial= NULL;
+										asn1_serial= X509_get_serialNumber(x509Cert);
+										if(asn1_serial == NULL){
+											printf("%s    ERROR: X509_get_serialNumber() failed to get serial from certificate.%s\n", COL_RED, RESET);
+										}else{
+											char *neg;
+											int i= 0;
+											neg=(asn1_serial->type == V_ASN1_NEG_INTEGER)?"(Negative)":"";
+											printf("    Serial Number: %s",neg);
 											if (options->xmlOutput != 0)
-												fprintf(options->xmlOutput, "   <serial>-%lu</serial>\n", tempLong);
-										}
-										else
-										{
-											printf("    Serial Number: %lu\n", tempLong);
-											if (options->xmlOutput != 0)
-												fprintf(options->xmlOutput, "   <serial>%lu</serial>\n", tempLong);
+												fprintf(options->xmlOutput, "   <serial>");
+											for (i= 0; i<asn1_serial->length; i++) {
+												printf("%02x%c",asn1_serial->data[i],
+												((i+1 == asn1_serial->length)?'\n':':'));
+												if (options->xmlOutput != 0)
+													fprintf(options->xmlOutput, "%02x%c",asn1_serial->data[i],
+													((i+1 == asn1_serial->length)?'<':':'));
+											}
+												fprintf(options->xmlOutput, "/serial>\n");
 										}
 									}
 
