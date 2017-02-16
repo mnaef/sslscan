@@ -41,6 +41,7 @@
  *	- made hostname argument position independent
  *	- Introduce DISABLE_SSLv2 switch for Ubuntu 14.04
  *	- fixed handling of long serial numbers, 14.11.2016
+ *	- add support for TLS status request (OCSP stapling) 16.2.2017
  */
 
 // Includes...
@@ -54,6 +55,8 @@
 #include <openssl/pkcs12.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
+#include <openssl/tls1.h>
+#include <openssl/ocsp.h>
 
 // Defines...
 #define false 0
@@ -96,11 +99,11 @@ const char *program_banner = "                   _\n"
                              "          / __/ __| / __|/ __/ _` | '_ \\\n"
                              "          \\__ \\__ \\ \\__ \\ (_| (_| | | | |\n"
                              "          |___/___/_|___/\\___\\__,_|_| |_|\n\n"
-                             "                  Version 1.8.2-mn7\n"
+                             "                  Version 1.8.2-mn8\n"
                              "             http://www.titania.co.uk\n"
                              "        Copyright Ian Ventura-Whiting 2009\n"
-			     "                   -mn7, mnaef, 2016\n";
-const char *program_version = "sslscan version 1.8.2-mn7\nhttp://www.titania.co.uk\nCopyright (C) Ian Ventura-Whiting 2009\n";
+			     "                   -mn8, mnaef, 2017\n";
+const char *program_version = "sslscan version 1.8.2-mn8\nhttp://www.titania.co.uk\nCopyright (C) Ian Ventura-Whiting 2009\n";
 const char *xml_version = "1.8.2";
 
 
@@ -134,6 +137,7 @@ struct sslCheckOptions
 	int http;
 	int sniEnable;
 	char sniServername[512];
+	int OCSPStatusRequest;
 
 	// File Handles...
 	FILE *xmlOutput;
@@ -624,6 +628,15 @@ int testCipher(struct sslCheckOptions *options, struct sslCipher *sslCipherPoint
 					}
 				}
 
+				// add TLS Status reuqest (OCSP)
+				if (options->OCSPStatusRequest == true){
+					if(!SSL_set_tlsext_status_type(ssl, TLSEXT_STATUSTYPE_ocsp)){
+						status = false;
+						printf("%s    ERROR: Failed to set TLS Status request (OCSP stapling)%s\n", COL_RED,RESET);
+					}
+				}
+
+
 				// Connect SSL over socket
 				cipherStatus = SSL_connect(ssl);
 
@@ -907,6 +920,14 @@ int defaultCipher(struct sslCheckOptions *options, const SSL_METHOD *sslMethod)
 							}
 						}
 
+						// add TLS Status reuqest (OCSP)
+						if (options->OCSPStatusRequest == true){
+							if(!SSL_set_tlsext_status_type(ssl, TLSEXT_STATUSTYPE_ocsp)){
+								status = false;
+								printf("%s    ERROR: Failed to set TLS Status request (OCSP stapling)%s\n", COL_RED,RESET);
+							}
+						}
+
 						// Connect SSL over socket
 						cipherStatus = SSL_connect(ssl);
 						if (cipherStatus == 1)
@@ -1027,6 +1048,11 @@ int defaultCipher(struct sslCheckOptions *options, const SSL_METHOD *sslMethod)
 	return status;
 }
 
+/*static int ocsp_resp_cb(SSL *ssl, void *arg)
+{
+	return(true);
+}*/
+
 
 // Get certificate...
 int getCertificate(struct sslCheckOptions *options)
@@ -1049,6 +1075,9 @@ int getCertificate(struct sslCheckOptions *options)
 	int tempInt = 0;
 	int tempInt2 = 0;
 	long verifyError = 0;
+	int len = 0;
+	const unsigned char *raw_ocsp = NULL;
+	OCSP_RESPONSE  *ocsp_resp = NULL;
 
 	// Connect to host
 	socketDescriptor = tcpConnect(options);
@@ -1090,6 +1119,18 @@ int getCertificate(struct sslCheckOptions *options)
 									status = false;
 									printf("%s    ERROR: Failed to set the SNI servername to %s (SSLv1-3 does not support SNI)%s\n", COL_RED,options->sniServername,RESET);
 								}
+							}
+
+							// add TLS Status reuqest (OCSP)
+							if (options->OCSPStatusRequest == true){
+								if(SSL_set_tlsext_status_type(ssl, TLSEXT_STATUSTYPE_ocsp)){
+									//SSL_CTX_set_tlsext_status_cb(options->ctx, ocsp_resp_cb);
+								}
+								else{
+									status = false;
+									printf("%s    ERROR: Failed to set TLS Status request (OCSP stapling)%s\n", COL_RED,RESET);
+								}
+
 							}
 
 							// Connect SSL over socket
@@ -1333,6 +1374,27 @@ int getCertificate(struct sslCheckOptions *options)
 									X509_free(x509Cert);
 								}
 
+
+								// Show OCSP Ticket
+								if (options->OCSPStatusRequest == true){
+									printf("\n  %sCertificate Status Request (OCSP Stapling):%s\n", COL_BLUE, RESET);
+									// get the OCSP response
+									len= SSL_get_tlsext_status_ocsp_resp(ssl,&raw_ocsp);
+									if(!raw_ocsp){
+										printf("Certificate Status Request sent but no OCSP ticket stapled in response.\n");
+										return(1); // TODO return somenthing useful
+									}
+									// try to parse the OCSP response
+									ocsp_resp= d2i_OCSP_RESPONSE(NULL,&raw_ocsp,len);
+									if(!ocsp_resp){
+										printf("failed to parse OCSP response :( \n");
+										return(1);
+									}
+									// print/dump the response to the screen
+									OCSP_RESPONSE_print(stdoutBIO,ocsp_resp,0);
+								}
+								
+
 								if (options->xmlOutput != 0)
 									fprintf(options->xmlOutput, "  </certificate>\n");
 
@@ -1516,6 +1578,7 @@ int main(int argc, char *argv[])
 	options.ftps_dcs = false;
 	options.sslVersion = ssl_none;
 	options.pout = false;
+	options.OCSPStatusRequest = false;
 	SSL_library_init();
 
 	// Get program parameters
@@ -1642,6 +1705,11 @@ int main(int argc, char *argv[])
 			options.sniEnable = 1;
 			strncpy(options.sniServername,argv[argLoop]+6,sizeof(options.sniServername) -1);
 		}
+		
+		// TLS Certificate Status Request 
+		else if (((strcmp("--status-request", argv[argLoop]) == 0) ||  (strcmp("--ocsp-stapling", argv[argLoop]) == 0)) || (strcmp("-o", argv[argLoop]) == 0))
+			options.OCSPStatusRequest = 1;
+
 
 		// SSL HTTP Get...
 		else if (strcmp("--http", argv[argLoop]) == 0)
@@ -1727,12 +1795,15 @@ int main(int argc, char *argv[])
 			printf("\n");
 			printf("Protocol options:\n");
 			printf("  %s--sni=<hostname>%s     Enable SNI and set the Servername.\n", COL_GREEN, RESET);
+			printf("  %s--status-request%s     Request the certificate status (\"OCSP\n", COL_GREEN, RESET);
+			printf("                       Stapling\") during the TLS handshake.\n");
+			printf("  %s--ocsp-stapling, -o%s  Alias for --status-request.\n", COL_GREEN, RESET);
 			printf("  %s--bugs%s               Enable SSL implementation  bug work-\n", COL_GREEN, RESET);
 			printf("                       arounds.\n");
 			printf("\n");
 			printf("Application layer protocols:\n");
 			printf("  %s--esmtps%s             SMTP: Use STARTTLS to initiate SSL.\n", COL_GREEN, RESET);
-			printf("  %s--starttls%s           alias for --esmtps. Historic.\n", COL_GREEN, RESET);
+			printf("  %s--starttls%s           Alias for --esmtps. Historic.\n", COL_GREEN, RESET);
 			printf("  %s--pop3s%s              POP3: Use STLS to initiate SSL.\n", COL_GREEN, RESET);
 			printf("  %s--imaps%s              IMAP: Use STARTTLS to initiate SSL.\n", COL_GREEN, RESET);
 			printf("  %s--ftps%s               FTP: Use AUTH TLS to initiate SSL.\n", COL_GREEN, RESET);
