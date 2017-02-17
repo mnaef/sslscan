@@ -42,6 +42,9 @@
  *	- Introduce DISABLE_SSLv2 switch for Ubuntu 14.04
  *	- fixed handling of long serial numbers, 14.11.2016
  *	- add support for TLS status request (OCSP stapling) 16.2.2017
+ *	  Some Notes:
+ *	  	- nice implementaion example: http://ftp.netbsd.org/pub/NetBSD/NetBSD-current/src/external/bsd/wpa/dist/src/crypto/tls_openssl.c
+ *	  	- man SSL_CTX_set_tlsext_status_cb
  */
 
 // Includes...
