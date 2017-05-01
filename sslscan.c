@@ -1749,7 +1749,6 @@ int main(int argc, char *argv[])
 	}
 	// SNI requested with no specific Servername. Use the Hostname.
 	if((options.sniEnable == 1) && (sizeof(options.sniServername == 0))){
-		printf("BLAAAAAAA\n");
 		strncpy(options.sniServername,options.host, sizeof(options.host) -1);
 	}
 
