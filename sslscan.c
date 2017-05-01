@@ -102,12 +102,11 @@ const char *program_banner = "                   _\n"
                              "          / __/ __| / __|/ __/ _` | '_ \\\n"
                              "          \\__ \\__ \\ \\__ \\ (_| (_| | | | |\n"
                              "          |___/___/_|___/\\___\\__,_|_| |_|\n\n"
-                             "                  Version 1.8.2-mn8\n"
-                             "             http://www.titania.co.uk\n"
+                             "                  Version 1.9\n"
                              "        Copyright Ian Ventura-Whiting 2009\n"
-			     "                   -mn8, mnaef, 2017\n";
-const char *program_version = "sslscan version 1.8.2-mn8\nhttp://www.titania.co.uk\nCopyright (C) Ian Ventura-Whiting 2009\n";
-const char *xml_version = "1.8.2";
+			     "                  Michael Naef 2015-2017\n";
+const char *program_version = "sslscan version 1.9";
+const char *xml_version = "1.9";
 
 
 struct sslCipher
@@ -1702,11 +1701,17 @@ int main(int argc, char *argv[])
 		else if (strcmp("--bugs", argv[argLoop]) == 0)
 			options.sslbugs = 1;
 
-		// SNI
+		// SNI with a specific Servername
 		else if (strncmp("--sni=", argv[argLoop], 6) == 0)
 		{
 			options.sniEnable = 1;
 			strncpy(options.sniServername,argv[argLoop]+6,sizeof(options.sniServername) -1);
+		}
+		
+		// SNI, reuse the Hostname provided 
+		else if (strncmp("--sni", argv[argLoop], 5) == 0)
+		{
+			options.sniEnable = 1;
 		}
 		
 		// TLS Certificate Status Request 
@@ -1741,6 +1746,11 @@ int main(int argc, char *argv[])
 			}else{
 				mode = mode_help;
 			}
+	}
+	// SNI requested with no specific Servername. Use the Hostname.
+	if((options.sniEnable == 1) && (sizeof(options.sniServername == 0))){
+		printf("BLAAAAAAA\n");
+		strncpy(options.sniServername,options.host, sizeof(options.host) -1);
 	}
 
 	// Open XML file output...
@@ -1797,7 +1807,9 @@ int main(int argc, char *argv[])
 			printf("  %s--tls1_2%s             Test TLSv1.2 protocol.\n", COL_GREEN, RESET);
 			printf("\n");
 			printf("Protocol options:\n");
-			printf("  %s--sni=<hostname>%s     Enable SNI and set the Servername.\n", COL_GREEN, RESET);
+			printf("  %s--sni%s                Enable SNI and use the hostname as\n", COL_GREEN, RESET);
+			printf("                       indicated servername.\n");
+			printf("  %s--sni=<hostname>%s     Enable SNI and set a specific servername.\n", COL_GREEN, RESET);
 			printf("  %s--status-request%s     Request the certificate status (\"OCSP\n", COL_GREEN, RESET);
 			printf("                       Stapling\") during the TLS handshake.\n");
 			printf("  %s--ocsp-stapling, -o%s  Alias for --status-request.\n", COL_GREEN, RESET);
@@ -1843,7 +1855,7 @@ int main(int argc, char *argv[])
 		// Check a single host/port ciphers...
 		case mode_single:
 		case mode_multiple:
-			printf("%s%s%s", COL_BLUE, program_banner, RESET);
+			printf("%s%s%s", COL_BLUE, program_version, RESET);
 
 			SSLeay_add_all_algorithms();
 			ERR_load_crypto_strings();
